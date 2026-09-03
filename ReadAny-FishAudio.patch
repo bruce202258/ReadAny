@@ -1,0 +1,1076 @@
+diff --git a/packages/app-expo/src/lib/platform/rn-tts-factories.ts b/packages/app-expo/src/lib/platform/rn-tts-factories.ts
+index bd8c436..59d9816 100644
+--- a/packages/app-expo/src/lib/platform/rn-tts-factories.ts
++++ b/packages/app-expo/src/lib/platform/rn-tts-factories.ts
+@@ -27,5 +27,6 @@ export const rnTTSPlayerFactories: TTSPlayerFactories = {
+   createEdgeTTS: () => new TrackPlayerEdgeTTSPlayer(),
+   createDashScopeTTS: () => new TrackPlayerDashScopeTTSPlayer(),
+   createXiaomiTTS: () => new TrackPlayerCloudTTSPlayer(),
++  createFishAudioTTS: () => new TrackPlayerCloudTTSPlayer(),
+   createOpenAICompatibleTTS: () => new TrackPlayerCloudTTSPlayer(),
+ };
+diff --git a/packages/app-expo/src/lib/platform/track-player-cloud-tts-player.ts b/packages/app-expo/src/lib/platform/track-player-cloud-tts-player.ts
+index 5a7ab70..d3665a1 100644
+--- a/packages/app-expo/src/lib/platform/track-player-cloud-tts-player.ts
++++ b/packages/app-expo/src/lib/platform/track-player-cloud-tts-player.ts
+@@ -1,6 +1,7 @@
+ import {
+   type ITTSPlayer,
+   type TTSConfig,
++  fetchFishAudioTTSAudio,
+   fetchOpenAITTSAudio,
+   fetchXiaomiTTSWav,
+   isTTSAbortError,
+@@ -25,6 +26,7 @@ const DEFAULT_ARTWORK = (() => {
+ 
+ function extensionForConfig(config: TTSConfig): string {
+   if (config.engine === "xiaomi") return "wav";
++  if (config.engine === "fish-audio") return "mp3";
+   if (config.openaiTtsEndpoint === "chat-completions") {
+     return config.openaiTtsFormat === "pcm16" ? "wav" : config.openaiTtsFormat;
+   }
+@@ -267,7 +269,9 @@ export class TrackPlayerCloudTTSPlayer implements ITTSPlayer {
+     const bytes =
+       config.engine === "xiaomi"
+         ? await fetchXiaomiTTSWav(this._chunks[index], config)
+-        : await fetchOpenAITTSAudio(this._chunks[index], config);
++        : config.engine === "fish-audio"
++          ? await fetchFishAudioTTSAudio(this._chunks[index], config)
++          : await fetchOpenAITTSAudio(this._chunks[index], config);
+     if (this._stopped || gen !== this._speakGen) throw new Error("aborted");
+ 
+     const ext = extensionForConfig(config);
+diff --git a/packages/app-expo/src/screens/settings/TTSSettingsScreen.tsx b/packages/app-expo/src/screens/settings/TTSSettingsScreen.tsx
+index 923ecbe..4949814 100644
+--- a/packages/app-expo/src/screens/settings/TTSSettingsScreen.tsx
++++ b/packages/app-expo/src/screens/settings/TTSSettingsScreen.tsx
+@@ -24,14 +24,7 @@ import {
+ import type { TFunction } from "i18next";
+ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+ import { useTranslation } from "react-i18next";
+-import {
+-  ScrollView,
+-  StyleSheet,
+-  Text,
+-  TextInput,
+-  TouchableOpacity,
+-  View,
+-} from "react-native";
++import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+ import { SafeAreaView } from "react-native-safe-area-context";
+ import { PasswordInput } from "../../components/ui/PasswordInput";
+ import {
+@@ -81,10 +74,7 @@ export default function TTSSettingsScreen() {
+   const displayLocale = i18n.resolvedLanguage || i18n.language;
+   const edgeVoiceGroups = useMemo(() => groupEdgeTTSVoices(EDGE_TTS_VOICES), []);
+ 
+-  const systemVoiceGroups = useMemo(
+-    () => groupSystemVoiceOptions(systemVoices),
+-    [systemVoices],
+-  );
++  const systemVoiceGroups = useMemo(() => groupSystemVoiceOptions(systemVoices), [systemVoices]);
+   const selectedSystemVoiceValue = useMemo(
+     () => resolveSystemVoiceValue(config.voiceName, systemVoices),
+     [config.voiceName, systemVoices],
+@@ -174,9 +164,7 @@ export default function TTSSettingsScreen() {
+     >
+       <Text style={[styles.previewBtnText, isPreviewing && styles.previewBtnTextActive]}>
+         {isPreviewing ? "■" : "▶"}{" "}
+-        {isPreviewing
+-          ? t("common.previewing", "试听中")
+-          : t("common.preview", "试听")}
++        {isPreviewing ? t("common.previewing", "试听中") : t("common.preview", "试听")}
+       </Text>
+     </TouchableOpacity>
+   );
+@@ -196,34 +184,36 @@ export default function TTSSettingsScreen() {
+         style={styles.scroll}
+         contentContainerStyle={[styles.scrollContent, { alignItems: "center" }]}
+       >
+-          <View style={[styles.contentColumn, { width: "100%", maxWidth: layout.centeredContentWidth }]}>
+-            <View style={styles.section}>
+-              <Text style={styles.sectionTitle}>{t("tts.voiceProfile", "朗读方案")}</Text>
+-              <View style={styles.profileList}>
+-                {profiles.map((profile) => {
+-                  const active = activeProfile.id === profile.id;
+-                  return (
+-                    <TouchableOpacity
+-                      key={profile.id}
+-                      style={[styles.profileItem, active && styles.profileItemActive]}
+-                      onPress={() => selectProfile(profile.id)}
+-                      activeOpacity={0.7}
+-                    >
+-                      <View style={{ flex: 1 }}>
+-                        <Text style={[styles.profileName, active && styles.profileNameActive]}>
+-                          {profileName(profile, t)}
+-                        </Text>
+-                      </View>
+-                      {active && <Text style={styles.profileStatus}>✓</Text>}
+-                    </TouchableOpacity>
+-                  );
+-                })}
+-              </View>
++        <View
++          style={[styles.contentColumn, { width: "100%", maxWidth: layout.centeredContentWidth }]}
++        >
++          <View style={styles.section}>
++            <Text style={styles.sectionTitle}>{t("tts.voiceProfile", "朗读方案")}</Text>
++            <View style={styles.profileList}>
++              {profiles.map((profile) => {
++                const active = activeProfile.id === profile.id;
++                return (
++                  <TouchableOpacity
++                    key={profile.id}
++                    style={[styles.profileItem, active && styles.profileItemActive]}
++                    onPress={() => selectProfile(profile.id)}
++                    activeOpacity={0.7}
++                  >
++                    <View style={{ flex: 1 }}>
++                      <Text style={[styles.profileName, active && styles.profileNameActive]}>
++                        {profileName(profile, t)}
++                      </Text>
++                    </View>
++                    {active && <Text style={styles.profileStatus}>✓</Text>}
++                  </TouchableOpacity>
++                );
++              })}
+             </View>
++          </View>
+ 
+-            {/* Voice Selection */}
+-            <View style={styles.section}>
+-              <Text style={styles.sectionTitle}>{t("tts.voiceSelect", "声音选择")}</Text>
++          {/* Voice Selection */}
++          <View style={styles.section}>
++            <Text style={styles.sectionTitle}>{t("tts.voiceSelect", "声音选择")}</Text>
+ 
+             {config.engine === "edge" && (
+               <ScrollView style={styles.voiceList} nestedScrollEnabled>
+@@ -476,10 +466,7 @@ export default function TTSSettingsScreen() {
+                           activeOpacity={0.7}
+                         >
+                           <Text
+-                            style={[
+-                              styles.optionChipText,
+-                              active && styles.optionChipTextActive,
+-                            ]}
++                            style={[styles.optionChipText, active && styles.optionChipTextActive]}
+                           >
+                             {endpoint === "audio-speech" ? "/audio/speech" : "/chat/completions"}
+                           </Text>
+@@ -504,10 +491,7 @@ export default function TTSSettingsScreen() {
+                           activeOpacity={0.7}
+                         >
+                           <Text
+-                            style={[
+-                              styles.optionChipText,
+-                              active && styles.optionChipTextActive,
+-                            ]}
++                            style={[styles.optionChipText, active && styles.optionChipTextActive]}
+                           >
+                             {format}
+                           </Text>
+@@ -573,54 +557,99 @@ export default function TTSSettingsScreen() {
+                 </View>
+               </>
+             )}
+-            </View>
++            {config.engine === "fish-audio" && (
++              <>
++                <View style={styles.fieldGroup}>
++                  <Text style={styles.fieldLabel}>{t("tts.model", "Model")}</Text>
++                  <TextInput
++                    style={styles.input}
++                    value={config.fishAudioModel}
++                    onChangeText={(v) => {
++                      updateActiveProfile({ model: v });
++                      updateConfig({ fishAudioModel: v });
++                    }}
++                    placeholder="s2.1-pro-free"
++                    placeholderTextColor={colors.mutedForeground}
++                    autoCapitalize="none"
++                  />
++                </View>
++                <View style={styles.fieldGroup}>
++                  <Text style={styles.fieldLabel}>{t("tts.voice", "声音模型 ID")}</Text>
++                  <TextInput
++                    style={styles.input}
++                    value={config.fishAudioReferenceId}
++                    onChangeText={(v) => {
++                      updateActiveProfile({ voice: v });
++                      updateConfig({ fishAudioReferenceId: v });
++                    }}
++                    placeholder="reference_id（留空使用默认音色）"
++                    placeholderTextColor={colors.mutedForeground}
++                    autoCapitalize="none"
++                  />
++                </View>
++                <View style={styles.fieldGroup}>
++                  <Text style={styles.fieldLabel}>{t("tts.apiKey", "API Key")}</Text>
++                  <PasswordInput
++                    style={styles.input}
++                    value={config.fishAudioApiKey || ""}
++                    onChangeText={(v) => {
++                      updateActiveProfile({ apiKey: v });
++                      updateConfig({ fishAudioApiKey: v });
++                    }}
++                    placeholder="sk-..."
++                    placeholderTextColor={colors.mutedForeground}
++                  />
++                </View>
++              </>
++            )}
++          </View>
+ 
+-            {/* Rate & Pitch */}
+-            <View style={styles.section}>
+-              <Text style={styles.sectionTitle}>{t("tts.params", "语音参数")}</Text>
+-              <View style={styles.paramsCard}>
+-                {/* Rate */}
++          {/* Rate & Pitch */}
++          <View style={styles.section}>
++            <Text style={styles.sectionTitle}>{t("tts.params", "语音参数")}</Text>
++            <View style={styles.paramsCard}>
++              {/* Rate */}
++              <View style={styles.paramRow}>
++                <View style={styles.paramHeader}>
++                  <Text style={styles.paramLabel}>{t("tts.rate", "语速")}</Text>
++                  <Text style={styles.paramValue}>{config.rate.toFixed(1)}x</Text>
++                </View>
++                <TextInput
++                  style={styles.input}
++                  keyboardType="decimal-pad"
++                  value={String(config.rate)}
++                  onChangeText={(v) => {
++                    const n = Number.parseFloat(v);
++                    if (!Number.isNaN(n) && n >= 0.5 && n <= 2) updateConfig({ rate: n });
++                  }}
++                  placeholder="0.5 - 2.0"
++                  placeholderTextColor={colors.mutedForeground}
++                />
++              </View>
++
++              {/* Pitch (system only) */}
++              {config.engine === "system" && (
+                 <View style={styles.paramRow}>
+                   <View style={styles.paramHeader}>
+-                    <Text style={styles.paramLabel}>{t("tts.rate", "语速")}</Text>
+-                    <Text style={styles.paramValue}>{config.rate.toFixed(1)}x</Text>
++                    <Text style={styles.paramLabel}>{t("tts.pitch", "音调")}</Text>
++                    <Text style={styles.paramValue}>{config.pitch.toFixed(1)}</Text>
+                   </View>
+                   <TextInput
+                     style={styles.input}
+                     keyboardType="decimal-pad"
+-                    value={String(config.rate)}
++                    value={String(config.pitch)}
+                     onChangeText={(v) => {
+                       const n = Number.parseFloat(v);
+-                      if (!Number.isNaN(n) && n >= 0.5 && n <= 2) updateConfig({ rate: n });
++                      if (!Number.isNaN(n) && n >= 0.5 && n <= 2) updateConfig({ pitch: n });
+                     }}
+                     placeholder="0.5 - 2.0"
+                     placeholderTextColor={colors.mutedForeground}
+                   />
+                 </View>
+-
+-                {/* Pitch (system only) */}
+-                {config.engine === "system" && (
+-                  <View style={styles.paramRow}>
+-                    <View style={styles.paramHeader}>
+-                      <Text style={styles.paramLabel}>{t("tts.pitch", "音调")}</Text>
+-                      <Text style={styles.paramValue}>{config.pitch.toFixed(1)}</Text>
+-                    </View>
+-                    <TextInput
+-                      style={styles.input}
+-                      keyboardType="decimal-pad"
+-                      value={String(config.pitch)}
+-                      onChangeText={(v) => {
+-                        const n = Number.parseFloat(v);
+-                        if (!Number.isNaN(n) && n >= 0.5 && n <= 2) updateConfig({ pitch: n });
+-                      }}
+-                      placeholder="0.5 - 2.0"
+-                      placeholderTextColor={colors.mutedForeground}
+-                    />
+-                  </View>
+-                )}
+-              </View>
++              )}
+             </View>
+           </View>
++        </View>
+       </KeyboardAwareScrollView>
+     </SafeAreaView>
+   );
+diff --git a/packages/app-expo/src/stores/tts-store.ts b/packages/app-expo/src/stores/tts-store.ts
+index 4a3d111..ab2fcae 100644
+--- a/packages/app-expo/src/stores/tts-store.ts
++++ b/packages/app-expo/src/stores/tts-store.ts
+@@ -14,9 +14,9 @@ import TrackPlayer from "react-native-track-player";
+ import { create } from "zustand";
+ import { ExpoSpeechTTSPlayer } from "../lib/platform/expo-speech-player";
+ import { canUseSystemTtsSynthesis } from "../lib/platform/system-tts-synthesis";
++import { TrackPlayerCloudTTSPlayer } from "../lib/platform/track-player-cloud-tts-player";
+ import { TrackPlayerDashScopeTTSPlayer } from "../lib/platform/track-player-dashscope-player";
+ import { TrackPlayerEdgeTTSPlayer } from "../lib/platform/track-player-edge-player";
+-import { TrackPlayerCloudTTSPlayer } from "../lib/platform/track-player-cloud-tts-player";
+ import { TrackPlayerSystemTTSPlayer } from "../lib/platform/track-player-system-player";
+ import { withPersist } from "./persist";
+ 
+@@ -27,6 +27,7 @@ export interface TTSPlayerFactories {
+   createEdgeTTS: () => ITTSPlayer;
+   createDashScopeTTS: () => ITTSPlayer;
+   createXiaomiTTS: () => ITTSPlayer;
++  createFishAudioTTS: () => ITTSPlayer;
+   createOpenAICompatibleTTS: () => ITTSPlayer;
+ }
+ 
+@@ -43,6 +44,7 @@ const defaultFactories: TTSPlayerFactories = {
+   createEdgeTTS: () => new TrackPlayerEdgeTTSPlayer(),
+   createDashScopeTTS: () => new TrackPlayerDashScopeTTSPlayer(),
+   createXiaomiTTS: () => new TrackPlayerCloudTTSPlayer(),
++  createFishAudioTTS: () => new TrackPlayerCloudTTSPlayer(),
+   createOpenAICompatibleTTS: () => new TrackPlayerCloudTTSPlayer(),
+ };
+ 
+@@ -51,6 +53,7 @@ let _systemTTS: ITTSPlayer | null = null;
+ let _edgeTTS: ITTSPlayer | null = null;
+ let _dashscopeTTS: ITTSPlayer | null = null;
+ let _xiaomiTTS: ITTSPlayer | null = null;
++let _fishAudioTTS: ITTSPlayer | null = null;
+ let _openAICompatibleTTS: ITTSPlayer | null = null;
+ let _activeTTS: ITTSPlayer | null = null;
+ 
+@@ -79,6 +82,11 @@ function getXiaomiTTS(): ITTSPlayer {
+   return _xiaomiTTS;
+ }
+ 
++function getFishAudioTTS(): ITTSPlayer {
++  if (!_fishAudioTTS) _fishAudioTTS = _factories.createFishAudioTTS();
++  return _fishAudioTTS;
++}
++
+ function getOpenAICompatibleTTS(): ITTSPlayer {
+   if (!_openAICompatibleTTS) {
+     _openAICompatibleTTS = _factories.createOpenAICompatibleTTS();
+@@ -132,6 +140,7 @@ function detachAndStopAllPlayers(): void {
+   detachAndStopPlayer(_edgeTTS);
+   detachAndStopPlayer(_dashscopeTTS);
+   detachAndStopPlayer(_xiaomiTTS);
++  detachAndStopPlayer(_fishAudioTTS);
+   detachAndStopPlayer(_openAICompatibleTTS);
+ }
+ 
+@@ -173,10 +182,16 @@ function syncProfileUpdatesFromLegacyFields(
+     if (updates.xiaomiStylePrompt !== undefined) {
+       profileUpdates.stylePrompt = updates.xiaomiStylePrompt;
+     }
++  } else if (targetProvider === "fish-audio") {
++    if (updates.fishAudioApiKey !== undefined) profileUpdates.apiKey = updates.fishAudioApiKey;
++    if (updates.fishAudioReferenceId !== undefined)
++      profileUpdates.voice = updates.fishAudioReferenceId;
++    if (updates.fishAudioModel !== undefined) profileUpdates.model = updates.fishAudioModel;
+   } else if (targetProvider === "openai-compatible") {
+     if (updates.openaiTtsBaseUrl !== undefined) profileUpdates.baseUrl = updates.openaiTtsBaseUrl;
+     if (updates.openaiTtsApiKey !== undefined) profileUpdates.apiKey = updates.openaiTtsApiKey;
+-    if (updates.openaiTtsEndpoint !== undefined) profileUpdates.endpoint = updates.openaiTtsEndpoint;
++    if (updates.openaiTtsEndpoint !== undefined)
++      profileUpdates.endpoint = updates.openaiTtsEndpoint;
+     if (updates.openaiTtsModel !== undefined) profileUpdates.model = updates.openaiTtsModel;
+     if (updates.openaiTtsVoice !== undefined) profileUpdates.voice = updates.openaiTtsVoice;
+     if (updates.openaiTtsFormat !== undefined) profileUpdates.format = updates.openaiTtsFormat;
+@@ -214,6 +229,9 @@ function getPlayerForConfig(config: TTSConfig): ITTSPlayer {
+   if (config.engine === "xiaomi") {
+     return getXiaomiTTS();
+   }
++  if (config.engine === "fish-audio") {
++    return getFishAudioTTS();
++  }
+   if (config.engine === "openai-compatible") {
+     return getOpenAICompatibleTTS();
+   }
+@@ -682,5 +700,6 @@ export function setTTSPlayerFactories(factories: Partial<TTSPlayerFactories>): v
+   _edgeTTS = null;
+   _dashscopeTTS = null;
+   _xiaomiTTS = null;
++  _fishAudioTTS = null;
+   _openAICompatibleTTS = null;
+ }
+diff --git a/packages/app/src/components/settings/TTSSettings.tsx b/packages/app/src/components/settings/TTSSettings.tsx
+index f94dc72..01c7a1a 100644
+--- a/packages/app/src/components/settings/TTSSettings.tsx
++++ b/packages/app/src/components/settings/TTSSettings.tsx
+@@ -8,12 +8,6 @@ import {
+   SelectValue,
+ } from "@/components/ui/select";
+ import { Slider } from "@/components/ui/slider";
+-import {
+-  DASHSCOPE_VOICES,
+-  EDGE_TTS_VOICES,
+-  XIAOMI_TTS_VOICES,
+-  getSystemVoices,
+-} from "@/lib/tts/tts-service";
+ import {
+   DEFAULT_SYSTEM_VOICE_VALUE,
+   findSystemVoiceLabel,
+@@ -22,18 +16,24 @@ import {
+   resolveSystemVoiceValue,
+ } from "@/lib/tts/system-voices";
+ import { previewTTSConfig, stopTTSPreview } from "@/lib/tts/tts-preview";
++import {
++  DASHSCOPE_VOICES,
++  EDGE_TTS_VOICES,
++  XIAOMI_TTS_VOICES,
++  getSystemVoices,
++} from "@/lib/tts/tts-service";
+ import { useTTSStore } from "@/stores/tts-store";
+ import {
+   DEFAULT_XIAOMI_STYLE_PROMPT,
++  type TTSProfile,
++  type TTSProviderType,
+   getActiveTTSProfile,
+   getLocaleDisplayLabel,
+   getTTSProviderDefinition,
+   groupEdgeTTSVoices,
+-  type TTSProviderType,
+-  type TTSProfile,
+ } from "@readany/core/tts";
+-import { Cloud, Headphones, Mic, Play, Settings2, Square, Zap } from "lucide-react";
+ import type { TFunction } from "i18next";
++import { Cloud, Headphones, Mic, Play, Settings2, Square, Zap } from "lucide-react";
+ /**
+  * TTSSettings — TTS configuration panel in the settings dialog.
+  *
+@@ -156,15 +156,16 @@ export function TTSSettings() {
+       ? defaultStylePrompt
+       : config.openaiTtsStylePrompt;
+   const activeProvider = getTTSProviderDefinition(activeProfile.provider);
+-  const providerIcon = activeProfile.provider === "system"
+-    ? Headphones
+-    : activeProfile.provider === "edge"
+-      ? Zap
+-      : activeProfile.provider === "dashscope"
+-        ? Mic
+-        : activeProfile.provider === "xiaomi"
+-          ? Cloud
+-          : Settings2;
++  const providerIcon =
++    activeProfile.provider === "system"
++      ? Headphones
++      : activeProfile.provider === "edge"
++        ? Zap
++        : activeProfile.provider === "dashscope"
++          ? Mic
++          : activeProfile.provider === "xiaomi"
++            ? Cloud
++            : Settings2;
+   const ProviderIcon = providerIcon;
+ 
+   const selectProfile = (profileId: string) => {
+@@ -201,9 +202,7 @@ export function TTSSettings() {
+             ) : (
+               <Play className="mr-1.5 h-3.5 w-3.5" />
+             )}
+-            {isPreviewing
+-              ? t("common.previewing", "试听中")
+-              : t("common.preview", "试听")}
++            {isPreviewing ? t("common.previewing", "试听中") : t("common.preview", "试听")}
+           </Button>
+         </div>
+ 
+@@ -561,7 +560,9 @@ export function TTSSettings() {
+               </div>
+               {config.openaiTtsEndpoint === "chat-completions" && (
+                 <div className="space-y-2">
+-                  <span className="text-sm text-foreground">{t("tts.stylePrompt", "朗读风格")}</span>
++                  <span className="text-sm text-foreground">
++                    {t("tts.stylePrompt", "朗读风格")}
++                  </span>
+                   <textarea
+                     className="min-h-[74px] w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm"
+                     value={openAIStylePromptValue}
+@@ -575,6 +576,46 @@ export function TTSSettings() {
+               )}
+             </>
+           )}
++
++          {config.engine === "fish-audio" && (
++            <>
++              <div className="space-y-2">
++                <span className="text-sm text-foreground">{t("tts.model", "Model")}</span>
++                <input
++                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
++                  value={config.fishAudioModel}
++                  onChange={(e) => {
++                    updateActiveProfile({ model: e.target.value });
++                    updateConfig({ fishAudioModel: e.target.value });
++                  }}
++                  placeholder="s2.1-pro-free"
++                />
++              </div>
++              <div className="space-y-2">
++                <span className="text-sm text-foreground">{t("tts.voice", "Voice model ID")}</span>
++                <input
++                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
++                  value={config.fishAudioReferenceId}
++                  onChange={(e) => {
++                    updateActiveProfile({ voice: e.target.value });
++                    updateConfig({ fishAudioReferenceId: e.target.value });
++                  }}
++                  placeholder="reference_id（可留空使用默认音色）"
++                />
++              </div>
++              <div className="space-y-2">
++                <span className="text-sm text-foreground">{t("tts.apiKey", "API Key")}</span>
++                <PasswordInput
++                  placeholder="sk-..."
++                  value={config.fishAudioApiKey}
++                  onChange={(e) => {
++                    updateActiveProfile({ apiKey: e.target.value });
++                    updateConfig({ fishAudioApiKey: e.target.value });
++                  }}
++                />
++              </div>
++            </>
++          )}
+         </div>
+       </section>
+     </div>
+diff --git a/packages/core/src/i18n/locales/en/tts.json b/packages/core/src/i18n/locales/en/tts.json
+index ba063c7..52d4092 100644
+--- a/packages/core/src/i18n/locales/en/tts.json
++++ b/packages/core/src/i18n/locales/en/tts.json
+@@ -29,6 +29,10 @@
+         "label": "Xiaomi MiMo",
+         "description": "MiMo-V2.5-TTS with voice and style control."
+       },
++      "fish-audio": {
++        "label": "Fish Audio",
++        "description": "Natural narration with support for your own voice model ID."
++      },
+       "openai-compatible": {
+         "label": "OpenAI Compatible",
+         "description": "Custom OpenAI audio/speech or chat audio endpoint."
+diff --git a/packages/core/src/i18n/locales/zh/tts.json b/packages/core/src/i18n/locales/zh/tts.json
+index 7464993..1f9d051 100644
+--- a/packages/core/src/i18n/locales/zh/tts.json
++++ b/packages/core/src/i18n/locales/zh/tts.json
+@@ -29,6 +29,10 @@
+         "label": "Xiaomi MiMo",
+         "description": "MiMo-V2.5-TTS，支持音色和风格控制"
+       },
++      "fish-audio": {
++        "label": "Fish Audio",
++        "description": "高自然度听书语音，支持填写自己的声音模型 ID"
++      },
+       "openai-compatible": {
+         "label": "OpenAI 兼容",
+         "description": "自定义 OpenAI audio/speech 或聊天音频接口"
+diff --git a/packages/core/src/stores/tts-store.ts b/packages/core/src/stores/tts-store.ts
+index 20a4421..3663979 100644
+--- a/packages/core/src/stores/tts-store.ts
++++ b/packages/core/src/stores/tts-store.ts
+@@ -20,6 +20,7 @@ import {
+   BrowserTTSPlayer,
+   DashScopeTTSPlayer,
+   EdgeTTSPlayer,
++  FishAudioTTSPlayer,
+   OpenAICompatibleTTSPlayer,
+   XiaomiTTSPlayer,
+ } from "../tts/tts-players";
+@@ -37,6 +38,7 @@ export interface TTSPlayerFactories {
+   createEdgeTTS: () => ITTSPlayer;
+   createDashScopeTTS: () => ITTSPlayer;
+   createXiaomiTTS: () => ITTSPlayer;
++  createFishAudioTTS: () => ITTSPlayer;
+   createOpenAICompatibleTTS: () => ITTSPlayer;
+ }
+ 
+@@ -46,6 +48,7 @@ const defaultFactories: TTSPlayerFactories = {
+   createEdgeTTS: () => new EdgeTTSPlayer(),
+   createDashScopeTTS: () => new DashScopeTTSPlayer(),
+   createXiaomiTTS: () => new XiaomiTTSPlayer(),
++  createFishAudioTTS: () => new FishAudioTTSPlayer(),
+   createOpenAICompatibleTTS: () => new OpenAICompatibleTTSPlayer(),
+ };
+ 
+@@ -69,6 +72,7 @@ export function setTTSPlayerFactories(factories: Partial<TTSPlayerFactories>): v
+   _edgeTTS = null;
+   _dashscopeTTS = null;
+   _xiaomiTTS = null;
++  _fishAudioTTS = null;
+   _openAICompatibleTTS = null;
+ }
+ 
+@@ -77,6 +81,7 @@ let _systemTTS: ITTSPlayer | null = null;
+ let _edgeTTS: ITTSPlayer | null = null;
+ let _dashscopeTTS: ITTSPlayer | null = null;
+ let _xiaomiTTS: ITTSPlayer | null = null;
++let _fishAudioTTS: ITTSPlayer | null = null;
+ let _openAICompatibleTTS: ITTSPlayer | null = null;
+ let _activeTTS: ITTSPlayer | null = null;
+ let _sessionSegments: string[] = [];
+@@ -108,6 +113,11 @@ function getXiaomiTTS(): ITTSPlayer {
+   return _xiaomiTTS;
+ }
+ 
++function getFishAudioTTS(): ITTSPlayer {
++  if (!_fishAudioTTS) _fishAudioTTS = _factories.createFishAudioTTS();
++  return _fishAudioTTS;
++}
++
+ function getOpenAICompatibleTTS(): ITTSPlayer {
+   if (!_openAICompatibleTTS) {
+     _openAICompatibleTTS = _factories.createOpenAICompatibleTTS();
+@@ -164,10 +174,16 @@ function syncProfileUpdatesFromLegacyFields(
+     if (updates.xiaomiStylePrompt !== undefined) {
+       profileUpdates.stylePrompt = updates.xiaomiStylePrompt;
+     }
++  } else if (targetProvider === "fish-audio") {
++    if (updates.fishAudioApiKey !== undefined) profileUpdates.apiKey = updates.fishAudioApiKey;
++    if (updates.fishAudioReferenceId !== undefined)
++      profileUpdates.voice = updates.fishAudioReferenceId;
++    if (updates.fishAudioModel !== undefined) profileUpdates.model = updates.fishAudioModel;
+   } else if (targetProvider === "openai-compatible") {
+     if (updates.openaiTtsBaseUrl !== undefined) profileUpdates.baseUrl = updates.openaiTtsBaseUrl;
+     if (updates.openaiTtsApiKey !== undefined) profileUpdates.apiKey = updates.openaiTtsApiKey;
+-    if (updates.openaiTtsEndpoint !== undefined) profileUpdates.endpoint = updates.openaiTtsEndpoint;
++    if (updates.openaiTtsEndpoint !== undefined)
++      profileUpdates.endpoint = updates.openaiTtsEndpoint;
+     if (updates.openaiTtsModel !== undefined) profileUpdates.model = updates.openaiTtsModel;
+     if (updates.openaiTtsVoice !== undefined) profileUpdates.voice = updates.openaiTtsVoice;
+     if (updates.openaiTtsFormat !== undefined) profileUpdates.format = updates.openaiTtsFormat;
+@@ -211,6 +227,7 @@ function detachAndStopAllPlayers(): void {
+   detachAndStopPlayer(_edgeTTS);
+   detachAndStopPlayer(_dashscopeTTS);
+   detachAndStopPlayer(_xiaomiTTS);
++  detachAndStopPlayer(_fishAudioTTS);
+   detachAndStopPlayer(_openAICompatibleTTS);
+ }
+ 
+@@ -224,6 +241,9 @@ function getPlayerForConfig(config: TTSConfig): ITTSPlayer {
+   if (config.engine === "xiaomi") {
+     return getXiaomiTTS();
+   }
++  if (config.engine === "fish-audio") {
++    return getFishAudioTTS();
++  }
+   if (config.engine === "openai-compatible") {
+     return getOpenAICompatibleTTS();
+   }
+diff --git a/packages/core/src/tts/cloud-tts.ts b/packages/core/src/tts/cloud-tts.ts
+index 9bd638c..425040a 100644
+--- a/packages/core/src/tts/cloud-tts.ts
++++ b/packages/core/src/tts/cloud-tts.ts
+@@ -1,9 +1,5 @@
+ import { getPlatformService } from "../services/platform";
+-import {
+-  DEFAULT_XIAOMI_TTS_BASE_URL,
+-  normalizeXiaomiTTSVoice,
+-  type TTSConfig,
+-} from "./types";
++import { DEFAULT_XIAOMI_TTS_BASE_URL, type TTSConfig, normalizeXiaomiTTSVoice } from "./types";
+ 
+ export const CLOUD_TTS_PCM_SAMPLE_RATE = 24000;
+ 
+@@ -43,8 +39,7 @@ export function isTTSAbortError(error: unknown): boolean {
+   const maybeError = error as { name?: unknown; code?: unknown; message?: unknown };
+   if (maybeError.name === "AbortError") return true;
+   if (maybeError.code === "ERR_CANCELED" || maybeError.code === "ABORT_ERR") return true;
+-  const message =
+-    typeof maybeError.message === "string" ? maybeError.message : String(error);
++  const message = typeof maybeError.message === "string" ? maybeError.message : String(error);
+   return /\b(aborted?|cancel(?:ed|led))\b/iu.test(message);
+ }
+ 
+@@ -158,3 +153,41 @@ export async function fetchOpenAITTSAudio(text: string, config: TTSConfig): Prom
+ 
+   return new Uint8Array(await response.arrayBuffer());
+ }
++
++/**
++ * Fish Audio's public REST API is deliberately kept separate from the
++ * OpenAI-compatible provider: Fish expects the model in an HTTP header and
++ * calls a saved voice model `reference_id`.
++ */
++export async function fetchFishAudioTTSAudio(text: string, config: TTSConfig): Promise<Uint8Array> {
++  if (!config.fishAudioApiKey) throw new Error("Fish Audio API key is required");
++
++  const body: Record<string, unknown> = {
++    text,
++    format: "mp3",
++    chunk_length: 300,
++    normalize: true,
++    prosody: {
++      speed: config.rate,
++      volume: 0,
++      normalize_loudness: true,
++    },
++  };
++  if (config.fishAudioReferenceId.trim()) {
++    body.reference_id = config.fishAudioReferenceId.trim();
++  }
++
++  const platform = getPlatformService();
++  const response = await platform.fetch("https://api.fish.audio/v1/tts", {
++    method: "POST",
++    headers: {
++      "Content-Type": "application/json",
++      Authorization: `Bearer ${config.fishAudioApiKey}`,
++      model: config.fishAudioModel || "s2.1-pro-free",
++    },
++    body: JSON.stringify(body),
++  });
++
++  if (!response.ok) throw await buildTTSHttpError("Fish Audio TTS", response);
++  return new Uint8Array(await response.arrayBuffer());
++}
+diff --git a/packages/core/src/tts/display.ts b/packages/core/src/tts/display.ts
+index 4457a35..b7643bf 100644
+--- a/packages/core/src/tts/display.ts
++++ b/packages/core/src/tts/display.ts
+@@ -1,5 +1,5 @@
+ import { EDGE_TTS_VOICES } from "./edge-tts";
+-import { DASHSCOPE_VOICES, XIAOMI_TTS_VOICES, type TTSConfig } from "./types";
++import { DASHSCOPE_VOICES, type TTSConfig, XIAOMI_TTS_VOICES } from "./types";
+ 
+ const MAX_EXCERPT_LENGTH = 96;
+ const MAX_PREVIEW_LENGTH = 72;
+@@ -77,6 +77,10 @@ export function getTTSVoiceLabel(config: TTSConfig): string {
+     return voice?.label || config.xiaomiVoice;
+   }
+ 
++  if (config.engine === "fish-audio") {
++    return config.fishAudioReferenceId || config.fishAudioModel || "Fish Audio";
++  }
++
+   if (config.engine === "openai-compatible") {
+     return config.openaiTtsVoice || config.openaiTtsModel || "OpenAI Compatible";
+   }
+diff --git a/packages/core/src/tts/index.ts b/packages/core/src/tts/index.ts
+index 8b07494..280590f 100644
+--- a/packages/core/src/tts/index.ts
++++ b/packages/core/src/tts/index.ts
+@@ -49,6 +49,7 @@ export {
+   BrowserTTSPlayer,
+   DashScopeTTSPlayer,
+   EdgeTTSPlayer,
++  FishAudioTTSPlayer,
+   OpenAICompatibleTTSPlayer,
+   XiaomiTTSPlayer,
+ } from "./tts-players";
+@@ -58,6 +59,7 @@ export {
+   buildXiaomiTTSUrl,
+   buildXiaomiTTSMessages,
+   fetchOpenAITTSAudio,
++  fetchFishAudioTTSAudio,
+   fetchXiaomiTTSWav,
+   isTTSAbortError,
+ } from "./cloud-tts";
+diff --git a/packages/core/src/tts/respeak.ts b/packages/core/src/tts/respeak.ts
+index 2a041dd..7b9a481 100644
+--- a/packages/core/src/tts/respeak.ts
++++ b/packages/core/src/tts/respeak.ts
+@@ -23,6 +23,14 @@ export function shouldRespeakForSynthChange(prev: TTSConfig, next: TTSConfig): b
+         next.xiaomiStylePrompt !== prev.xiaomiStylePrompt)
+     );
+   }
++  if (next.engine === "fish-audio") {
++    return (
++      !!next.fishAudioApiKey &&
++      (next.fishAudioReferenceId !== prev.fishAudioReferenceId ||
++        next.fishAudioModel !== prev.fishAudioModel ||
++        next.rate !== prev.rate)
++    );
++  }
+   if (next.engine === "openai-compatible") {
+     return (
+       !!next.openaiTtsApiKey &&
+diff --git a/packages/core/src/tts/tts-players.ts b/packages/core/src/tts/tts-players.ts
+index d6753ed..02ef621 100644
+--- a/packages/core/src/tts/tts-players.ts
++++ b/packages/core/src/tts/tts-players.ts
+@@ -12,15 +12,16 @@ import {
+   base64ToBytes,
+   buildOpenAIChatTTSMessages,
+   buildTTSHttpError,
+-  buildXiaomiTTSUrl,
+   buildXiaomiTTSMessages,
++  buildXiaomiTTSUrl,
++  fetchFishAudioTTSAudio,
+   fetchOpenAITTSAudio,
+   isTTSAbortError,
+ } from "./cloud-tts";
+ import { fetchEdgeTTSAudio } from "./edge-tts";
+ import { type ChunkBoundary, resolveCurrentChunk } from "./playback-cursor";
+ import { splitIntoChunks } from "./text-utils";
+-import { normalizeXiaomiTTSVoice, type ITTSPlayer, type TTSConfig } from "./types";
++import { type ITTSPlayer, type TTSConfig, normalizeXiaomiTTSVoice } from "./types";
+ 
+ // ── Browser SpeechSynthesis ──
+ 
+@@ -529,20 +530,15 @@ abstract class PCMStreamingTTSPlayer implements ITTSPlayer {
+       this.abortController = new AbortController();
+       let firstAudioReceived = false;
+       try {
+-        await this.streamChunkAudio(
+-          chunks[i],
+-          config,
+-          this.abortController.signal,
+-          (bytes) => {
+-            if (!this._playing || myRun !== this.runId || !this.audioCtx) return;
+-            this.pendingBytes.push(bytes);
+-            if (!firstAudioReceived) {
+-              firstAudioReceived = true;
+-              if (i === 0) this.onStateChange?.("playing");
+-            }
+-            this.scheduleFlush();
+-          },
+-        );
++        await this.streamChunkAudio(chunks[i], config, this.abortController.signal, (bytes) => {
++          if (!this._playing || myRun !== this.runId || !this.audioCtx) return;
++          this.pendingBytes.push(bytes);
++          if (!firstAudioReceived) {
++            firstAudioReceived = true;
++            if (i === 0) this.onStateChange?.("playing");
++          }
++          this.scheduleFlush();
++        });
+       } catch (err) {
+         if (!this._playing || myRun !== this.runId || isTTSAbortError(err)) return;
+         console.error(`[${this.engineName} TTS] chunk error:`, err);
+@@ -882,6 +878,39 @@ class BufferedAudioTTSPlayer implements ITTSPlayer {
+   }
+ }
+ 
++/** Fish Audio returns a regular MP3 response, so the common buffered player
++ * provides gapless queued playback and sentence progress on desktop. */
++export class FishAudioTTSPlayer implements ITTSPlayer {
++  private player = new BufferedAudioTTSPlayer(fetchFishAudioTTSAudio);
++
++  onStateChange?: (state: "playing" | "paused" | "stopped") => void;
++  onChunkChange?: (index: number, total: number) => void;
++  onEnd?: () => void;
++
++  get paused() {
++    return this.player.paused;
++  }
++
++  speak(text: string | string[], config: TTSConfig) {
++    this.player.onStateChange = (state) => this.onStateChange?.(state);
++    this.player.onChunkChange = (index, total) => this.onChunkChange?.(index, total);
++    this.player.onEnd = () => this.onEnd?.();
++    return this.player.speak(text, config);
++  }
++
++  pause() {
++    this.player.pause();
++  }
++
++  resume() {
++    this.player.resume();
++  }
++
++  stop() {
++    this.player.stop();
++  }
++}
++
+ export class OpenAICompatibleTTSPlayer implements ITTSPlayer {
+   private pcmPlayer = new (class extends PCMStreamingTTSPlayer {
+     protected engineName = "OpenAI-compatible";
+diff --git a/packages/core/src/tts/types.test.ts b/packages/core/src/tts/types.test.ts
+index c10bc27..d8a1343 100644
+--- a/packages/core/src/tts/types.test.ts
++++ b/packages/core/src/tts/types.test.ts
+@@ -1,10 +1,6 @@
+ import { describe, expect, it } from "vitest";
+ 
+-import {
+-  DEFAULT_XIAOMI_TTS_VOICE,
+-  XIAOMI_TTS_VOICES,
+-  normalizeTTSConfig,
+-} from "./types";
++import { DEFAULT_XIAOMI_TTS_VOICE, XIAOMI_TTS_VOICES, normalizeTTSConfig } from "./types";
+ 
+ describe("normalizeTTSConfig", () => {
+   it("preserves persisted default profile settings", () => {
+@@ -61,6 +57,28 @@ describe("normalizeTTSConfig", () => {
+     expect(config.xiaomiStylePrompt).toBe("Read softly.");
+   });
+ 
++  it("loads Fish Audio credentials and voice model from its profile", () => {
++    const config = normalizeTTSConfig({
++      engine: "fish-audio",
++      activeProfileId: "fish-audio-default",
++      profiles: [
++        {
++          id: "fish-audio-default",
++          name: "Fish Audio",
++          provider: "fish-audio",
++          apiKey: "fish-key",
++          model: "s2.1-pro",
++          voice: "voice-model-id",
++          format: "mp3",
++        },
++      ],
++    });
++
++    expect(config.fishAudioApiKey).toBe("fish-key");
++    expect(config.fishAudioModel).toBe("s2.1-pro");
++    expect(config.fishAudioReferenceId).toBe("voice-model-id");
++  });
++
+   it("falls back from removed Xiaomi voice IDs", () => {
+     const config = normalizeTTSConfig({
+       engine: "xiaomi",
+diff --git a/packages/core/src/tts/types.ts b/packages/core/src/tts/types.ts
+index 69915ab..2d29f03 100644
+--- a/packages/core/src/tts/types.ts
++++ b/packages/core/src/tts/types.ts
+@@ -2,7 +2,13 @@
+  * TTS types and constants — shared across all platforms.
+  */
+ 
+-export type TTSEngine = "system" | "edge" | "dashscope" | "xiaomi" | "openai-compatible";
++export type TTSEngine =
++  | "system"
++  | "edge"
++  | "dashscope"
++  | "xiaomi"
++  | "fish-audio"
++  | "openai-compatible";
+ export type LegacyTTSEngine = TTSEngine | "browser";
+ export type TTSProviderType = TTSEngine;
+ export type TTSAudioFormat = "pcm16" | "wav" | "mp3";
+@@ -36,6 +42,12 @@ export interface TTSConfig {
+   xiaomiVoice: string;
+   /** Natural-language style instruction for Xiaomi MiMo TTS */
+   xiaomiStylePrompt: string;
++  /** Fish Audio API key */
++  fishAudioApiKey: string;
++  /** Fish Audio voice-model ID (the API's reference_id) */
++  fishAudioReferenceId: string;
++  /** Fish Audio TTS model sent in the request's model header */
++  fishAudioModel: string;
+   /** OpenAI-compatible TTS base URL */
+   openaiTtsBaseUrl: string;
+   /** OpenAI-compatible TTS API Key */
+@@ -124,6 +136,17 @@ export const TTS_PROVIDER_DEFINITIONS: TTSProviderDefinition[] = [
+     supportsBaseUrl: true,
+     supportsStreaming: true,
+   },
++  {
++    id: "fish-audio",
++    label: "Fish Audio",
++    description: "Natural voice narration and custom voice models from Fish Audio.",
++    category: "cloud",
++    requiresApiKey: true,
++    supportsVoice: true,
++    supportsStylePrompt: false,
++    supportsBaseUrl: false,
++    supportsStreaming: false,
++  },
+   {
+     id: "openai-compatible",
+     label: "OpenAI Compatible",
+@@ -172,6 +195,9 @@ export const DEFAULT_TTS_CONFIG: TTSConfig = {
+   xiaomiBaseUrl: DEFAULT_XIAOMI_TTS_BASE_URL,
+   xiaomiVoice: DEFAULT_XIAOMI_TTS_VOICE,
+   xiaomiStylePrompt: DEFAULT_XIAOMI_STYLE_PROMPT,
++  fishAudioApiKey: "",
++  fishAudioReferenceId: "",
++  fishAudioModel: "s2.1-pro-free",
+   openaiTtsBaseUrl: "https://api.openai.com/v1",
+   openaiTtsApiKey: "",
+   openaiTtsEndpoint: "audio-speech",
+@@ -192,6 +218,7 @@ export function normalizeTTSEngine(engine: LegacyTTSEngine | string | null | und
+     engine === "edge" ||
+     engine === "dashscope" ||
+     engine === "xiaomi" ||
++    engine === "fish-audio" ||
+     engine === "openai-compatible"
+   ) {
+     return engine;
+@@ -204,8 +231,7 @@ export function normalizeTTSEngine(engine: LegacyTTSEngine | string | null | und
+ 
+ export function getTTSProviderDefinition(provider: TTSProviderType): TTSProviderDefinition {
+   return (
+-    TTS_PROVIDER_DEFINITIONS.find((item) => item.id === provider) ??
+-    TTS_PROVIDER_DEFINITIONS[0]
++    TTS_PROVIDER_DEFINITIONS.find((item) => item.id === provider) ?? TTS_PROVIDER_DEFINITIONS[0]
+   );
+ }
+ 
+@@ -243,6 +269,15 @@ export function createDefaultTTSProfiles(config: Partial<TTSConfig> = {}): TTSPr
+       format: "pcm16",
+       stylePrompt: config.xiaomiStylePrompt ?? DEFAULT_XIAOMI_STYLE_PROMPT,
+     },
++    {
++      id: "fish-audio-default",
++      name: "Fish Audio",
++      provider: "fish-audio",
++      apiKey: config.fishAudioApiKey ?? "",
++      voice: config.fishAudioReferenceId ?? "",
++      model: config.fishAudioModel ?? DEFAULT_TTS_CONFIG.fishAudioModel,
++      format: "mp3",
++    },
+     {
+       id: "openai-compatible-default",
+       name: "OpenAI Compatible",
+@@ -282,10 +317,7 @@ function normalizeProfiles(config: Partial<TTSConfig>): TTSProfile[] {
+         ? { ...profile, voice: normalizeXiaomiTTSVoice(profile.voice) }
+         : profile;
+     const fallback = merged.get(profile.id);
+-    merged.set(
+-      profile.id,
+-      fallback ? { ...fallback, ...normalizedProfile } : normalizedProfile,
+-    );
++    merged.set(profile.id, fallback ? { ...fallback, ...normalizedProfile } : normalizedProfile);
+   }
+   return Array.from(merged.values()).filter((profile) => {
+     if (defaultIds.has(profile.id)) return true;
+@@ -314,6 +346,10 @@ export function syncConfigFromActiveProfile(config: TTSConfig): TTSConfig {
+     next.xiaomiApiKey = activeProfile.apiKey ?? next.xiaomiApiKey;
+     next.xiaomiVoice = normalizeXiaomiTTSVoice(activeProfile.voice ?? next.xiaomiVoice);
+     next.xiaomiStylePrompt = activeProfile.stylePrompt ?? next.xiaomiStylePrompt;
++  } else if (engine === "fish-audio") {
++    next.fishAudioApiKey = activeProfile.apiKey ?? next.fishAudioApiKey;
++    next.fishAudioReferenceId = activeProfile.voice ?? next.fishAudioReferenceId;
++    next.fishAudioModel = activeProfile.model ?? next.fishAudioModel;
+   } else if (engine === "openai-compatible") {
+     next.openaiTtsBaseUrl = activeProfile.baseUrl ?? next.openaiTtsBaseUrl;
+     next.openaiTtsApiKey = activeProfile.apiKey ?? next.openaiTtsApiKey;
+@@ -339,7 +375,7 @@ export function normalizeTTSConfig(config: PersistedTTSConfig | null | undefined
+     ...DEFAULT_TTS_CONFIG,
+     ...config,
+     engine: normalizedEngine,
+-    activeProfileId: hasExplicitProfileId ? config.activeProfileId! : "",
++    activeProfileId: hasExplicitProfileId ? (config?.activeProfileId ?? "") : "",
+     voiceName: config?.voiceName ?? DEFAULT_TTS_CONFIG.voiceName,
+     systemVoiceLabel: config?.systemVoiceLabel ?? DEFAULT_TTS_CONFIG.systemVoiceLabel,
+     rate: typeof config?.rate === "number" ? config.rate : DEFAULT_TTS_CONFIG.rate,
+@@ -349,18 +385,18 @@ export function normalizeTTSConfig(config: PersistedTTSConfig | null | undefined
+     dashscopeVoice: config?.dashscopeVoice ?? DEFAULT_TTS_CONFIG.dashscopeVoice,
+     xiaomiApiKey: config?.xiaomiApiKey ?? DEFAULT_TTS_CONFIG.xiaomiApiKey,
+     xiaomiBaseUrl: config?.xiaomiBaseUrl ?? DEFAULT_TTS_CONFIG.xiaomiBaseUrl,
+-    xiaomiVoice: normalizeXiaomiTTSVoice(
+-      config?.xiaomiVoice ?? DEFAULT_TTS_CONFIG.xiaomiVoice,
+-    ),
++    xiaomiVoice: normalizeXiaomiTTSVoice(config?.xiaomiVoice ?? DEFAULT_TTS_CONFIG.xiaomiVoice),
+     xiaomiStylePrompt: config?.xiaomiStylePrompt ?? DEFAULT_TTS_CONFIG.xiaomiStylePrompt,
++    fishAudioApiKey: config?.fishAudioApiKey ?? DEFAULT_TTS_CONFIG.fishAudioApiKey,
++    fishAudioReferenceId: config?.fishAudioReferenceId ?? DEFAULT_TTS_CONFIG.fishAudioReferenceId,
++    fishAudioModel: config?.fishAudioModel ?? DEFAULT_TTS_CONFIG.fishAudioModel,
+     openaiTtsBaseUrl: config?.openaiTtsBaseUrl ?? DEFAULT_TTS_CONFIG.openaiTtsBaseUrl,
+     openaiTtsApiKey: config?.openaiTtsApiKey ?? DEFAULT_TTS_CONFIG.openaiTtsApiKey,
+     openaiTtsEndpoint: config?.openaiTtsEndpoint ?? DEFAULT_TTS_CONFIG.openaiTtsEndpoint,
+     openaiTtsModel: config?.openaiTtsModel ?? DEFAULT_TTS_CONFIG.openaiTtsModel,
+     openaiTtsVoice: config?.openaiTtsVoice ?? DEFAULT_TTS_CONFIG.openaiTtsVoice,
+     openaiTtsFormat: config?.openaiTtsFormat ?? DEFAULT_TTS_CONFIG.openaiTtsFormat,
+-    openaiTtsStylePrompt:
+-      config?.openaiTtsStylePrompt ?? DEFAULT_TTS_CONFIG.openaiTtsStylePrompt,
++    openaiTtsStylePrompt: config?.openaiTtsStylePrompt ?? DEFAULT_TTS_CONFIG.openaiTtsStylePrompt,
+     profiles: normalizeProfiles(profileSource),
+   };
+ 
