@@ -1,0 +1,59 @@
+name: Build Fish Audio APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    env:
+      APP_VARIANT: production
+      EXPO_NO_METRO_WORKSPACE_ROOT: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply Fish Audio patch
+        run: |
+          git apply --check ReadAny-FishAudio.patch
+          git apply ReadAny-FishAudio.patch
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build reader assets
+        run: pnpm --filter @readany/app-expo run build:reader
+
+      - name: Generate Android project
+        working-directory: packages/app-expo
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Assemble installable APK
+        working-directory: packages/app-expo/android
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ReadAny-FishAudio-APK
+          path: packages/app-expo/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
