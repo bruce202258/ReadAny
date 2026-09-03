@@ -20,6 +20,7 @@ jobs:
         run: |
           git apply --check ReadAny-FishAudio.patch
           git apply ReadAny-FishAudio.patch
+
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
@@ -39,18 +40,32 @@ jobs:
       - name: Build reader assets
         run: pnpm --filter @readany/app-expo run build:reader
 
+      - name: Disable development launcher
+        working-directory: packages/app-expo
+        run: |
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const source = fs.readFileSync("app.config.js", "utf8");
+          const updated = source.replace(
+            /\s*\[\s*"expo-dev-client",\s*\{\s*launchMode: "launcher",\s*\},\s*\],/,
+            "",
+          );
+          if (updated === source) throw new Error("Development launcher not found");
+          fs.writeFileSync("app.config.js", updated);
+          NODE
+
       - name: Generate Android project
         working-directory: packages/app-expo
         run: npx expo prebuild --platform android --no-install
 
       - name: Assemble installable APK
         working-directory: packages/app-expo/android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ReadAny-FishAudio-APK
-          path: packages/app-expo/android/app/build/outputs/apk/debug/app-debug.apk
+          path: packages/app-expo/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 7
